@@ -7,7 +7,9 @@
 
 services:
   web:
-    image: docker.io/wger/server:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
     depends_on:
       db:
         condition: service_healthy
@@ -34,7 +36,9 @@ services:
     restart: unless-stopped
 
   nginx:
-    image: docker.io/nginx:stable
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.nginx
     depends_on:
       - web
     volumes:
@@ -52,7 +56,9 @@ services:
     restart: unless-stopped
 
   db:
-    image: docker.io/postgres:15-alpine
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.postgres
     environment:
       - POSTGRES_USER=wger
       - POSTGRES_PASSWORD=wger
@@ -76,7 +82,9 @@ services:
     restart: unless-stopped
 
   cache:
-    image: docker.io/redis
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.redis
     expose:
       - 6379
     logging:
@@ -101,7 +109,9 @@ services:
     #mem_limit: 5gb
 
   celery_worker:
-    image: docker.io/wger/server:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.celery-worker
     command: /start-worker
     env_file:
       - ./config/prod.env
@@ -123,7 +133,9 @@ services:
       start_period: 30s
 
   celery_beat:
-    image: docker.io/wger/server:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.celery-beat
     command: /start-beat
     logging:
       driver: json-file
