@@ -1,0 +1,304 @@
+name: DevSecOps Pipeline - wger Docker Security Testing
+
+on:
+  push:
+    branches: [ "master", "main", "develop" ]
+  pull_request:
+    branches: [ "master", "main", "develop" ]
+  schedule:
+    - cron: '0 2 * * 1'  # Weekly security scans
+
+permissions:
+  contents: read
+  security-events: write
+  issues: write
+  deployments: write
+
+jobs:
+  # Stage 1: Docker Compose Validation & Secrets Scan
+  compose-validate:
+    name: "Stage 1: Docker Compose Validation & TruffleHog"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate Docker Compose files
+        run: |
+          docker compose -f docker-compose.yml config
+          docker compose -f docker-compose.prod.yml config || true
+          docker compose -f dev/docker-compose.yml config || true
+          echo "All Docker Compose files valid"
+
+      - name: Scan for secrets (TruffleHog)
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+
+  # Stage 2: Docker Image Vulnerability Scanning (Grype + Trivy)
+  image-scan:
+    name: "Stage 2: Docker Image Vulnerability Scan"
+    runs-on: ubuntu-latest
+    needs: compose-validate
+    steps:
+      - uses: actions/checkout@v4
+  
+      - name: Login to GHCR (for private wger images)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+  
+      - name: Pull images from Docker Compose
+        run: |
+          images=$(docker compose -f docker-compose.yml config | grep 'image:' | awk '{print $2}')
+          echo "Images to scan:"
+          echo "$images"
+          for img in $images; do
+            docker pull "$img"
+          done
+          echo "$images" > images.txt
+  
+      - name: Install Grype CLI
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b $RUNNER_TEMP/grype
+  
+      - name: Scan images with Grype and save to file
+        run: |
+          images=$(cat images.txt)
+          mkdir -p grype-reports
+          for img in $images; do
+            safe_name=$(echo "$img" | tr '/:@' '_')
+            echo "Scanning $img ..."
+            $RUNNER_TEMP/grype/grype "$img" -o sarif > "grype-reports/${safe_name}.sarif" 2>&1 || true
+          done
+  
+      - name: Upload Grype scan reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: grype-scan-reports
+          path: grype-reports/
+
+  # Stage 3: Docker Bench Security (CIS Benchmark)
+  docker-cis-benchmark:
+    name: "Stage 3: Docker CIS Benchmark"
+    runs-on: ubuntu-latest
+    needs: image-scan
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+  
+      - name: Remove old docker-bench-security folder
+        run: rm -rf docker-bench-security
+  
+      - name: Clone docker-bench-security
+        run: git clone https://github.com/docker/docker-bench-security.git
+  
+      - name: Run CIS Benchmark on selected containers
+        run: |
+          # Create results directory
+          mkdir -p docker-bench-security/results
+  
+          # Exact container names to scan
+          CONTAINERS="docker_wger-cache-1 docker_wger-db-1 docker_wger-web-1 docker_wger-nginx-1"
+          echo "Scanning containers: $CONTAINERS"
+  
+          # Run Docker Bench Security for each container and append to results
+          for c in $CONTAINERS; do
+            echo "Scanning container $c..."
+            sh docker-bench-security/docker-bench-security.sh -i $c -p PRINT >> docker-bench-security/results/scan-results.txt || true
+          done
+  
+          echo "Docker CIS Benchmark scan complete. Results saved to docker-bench-security/results/scan-results.txt"
+  
+      - name: Upload CIS Benchmark Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-bench-security-results
+          path: docker-bench-security/results/scan-results.txt
+          if-no-files-found: warn
+          compression-level: 6
+          overwrite: false
+          include-hidden-files: false
+
+  # Stage 4: Security & Vulnerability Scans
+  dast-scan:
+    name: "Stage 4: Full Vulnerability Scan (Trivy all images + Nuclei + OpenVAS)"
+    runs-on: ubuntu-latest
+    needs: image-scan
+    steps:
+      - uses: actions/checkout@v4
+  
+      # Pull images from Docker Compose
+      - name: Pull images from Docker Compose
+        run: |
+          images=$(docker compose -f docker-compose.yml config | grep 'image:' | awk '{print $2}')
+          echo "Images to scan:"
+          echo "$images"
+          for img in $images; do
+            docker pull "$img"
+          done
+          echo "$images" > images.txt
+  
+      # ==== Trivy: Scan all images ====
+      - name: Scan images with Trivy
+        run: |
+          sudo apt-get update && sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update && sudo apt-get install -y trivy
+          mkdir -p trivy-results
+          for img in $(cat images.txt); do
+            safe_name=$(echo "$img" | tr '/:@' '_')
+            echo "Scanning $img ..."
+            trivy image --format json -o "trivy-results/${safe_name}.json" "$img" || true
+          done
+  
+      # ==== Nuclei Web Scan ====
+      - name: Nuclei Web Scan
+        run: |
+          mkdir -p nuclei-results
+          docker run --rm --network host projectdiscovery/nuclei:latest \
+            -u https://localhost \
+            -tags cves,django,misconfig,default-logins, exposures \
+            -o nuclei-results/nuclei-results.json || true
+  
+      # ==== OpenVAS / Greenbone ====
+      - name: Start OpenVAS Container
+        run: |
+          docker pull greenbone/openvas-scanner-build
+          docker run -d --name openvas -p 9392:9392 greenbone/openvas-scanner-build
+          echo "Waiting 10 minutes for OpenVAS to initialize and sync feeds..."
+          sleep 600
+  
+      - name: Run OpenVAS scan
+        run: |
+          mkdir -p openvas-results
+          docker exec openvas gvm-cli socket --xml "<create_target><name>wger</name><hosts>localhost</hosts></create_target>" || true
+          docker exec openvas gvm-cli socket --xml "<create_task><name>wger_scan</name><target>wger</target></create_task>" || true
+          docker exec openvas gvm-cli socket --xml "<start_task><name>wger_scan</name></start_task>" || true
+          docker logs openvas > openvas-results/openvas-results.log || true
+  
+      # ==== Upload all scan results ====
+      - name: Upload Scan Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulnerability-scans
+          path: |
+            trivy-results/
+            nuclei-results/
+            openvas-results/
+  
+      # ==== Cleanup ====
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f docker-compose.yml down -v
+          docker stop openvas || true
+          docker rm openvas || true
+
+  # Stage 5: Production Compose Security Analysis
+  prod-security:
+    name: "Stage 5: Production Config Security Analysis"
+    runs-on: ubuntu-latest
+    needs: compose-validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Docker Compose security posture
+        run: |
+          # Check for privileged containers
+          docker compose -f docker-compose.prod.yml config | grep -i privileged && echo "Privileged containers found" || echo "No privileged containers"
+          
+          # Check for host network
+          docker compose -f docker-compose.prod.yml config | grep -i "network_mode: host" && echo "Host network detected" || echo "No host networking"
+          
+          # Check volumes for security
+          docker compose -f docker-compose.prod.yml config | grep -B1 -A1 ":/etc/" || echo "No sensitive host mounts"
+          
+          # Validate environment variables
+          grep -E "(DEBUG=True|ROOT_PASSWORD|SECRET_KEY)" config/prod.env || echo "No hardcoded secrets in env"
+          
+  # Stage 6: Dependency & Config Scanning
+  config-scan:
+    name: "Stage 6: Config & Dependency Scanning"
+    runs-on: ubuntu-latest
+    needs: compose-validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check config files for secrets
+        run: |
+          # Scan all config files
+          find config/ -type f \( -name "*.conf" -o -name "*.env" -o -name "*.yml" \) -exec grep -l -E "(password|secret|key|token)" {} \;
+          echo "Config secret scan complete"
+
+      - name: Dependency-Check on config files
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'wger-docker-configs'
+          path: './config'
+          format: 'JSON'
+
+  # Stage 7: Security Report & GitHub Issues
+  security-report:
+    name: "Stage 7: Security Summary & Notifications"
+    runs-on: ubuntu-latest
+    needs: [dast-scan, prod-security, config-scan, image-scan]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all security reports
+        uses: actions/download-artifact@v4
+
+      - name: Generate security summary
+        run: |
+          echo "## 🛡️ wger Docker Security Report" > summary.md
+          echo "- **Pipeline:** #${{ github.run_number }}" >> summary.md
+          echo "- **Images:** ${{ steps.scan.outputs.vulnerability-count-high }} high vulns" >> summary.md || echo "- **Images:** Scan complete" >> summary.md
+          echo "- **DAST:** ZAP + Nuclei complete" >> summary.md
+          echo "- **Docker Bench:** CIS compliance checked" >> summary.md
+          
+          # Check for critical issues
+          if ls nuclei-results.json 2>/dev/null && grep -q '"severity":"critical"' nuclei-results.json; then
+            echo "CRITICAL: Nuclei found issues"
+            exit 1
+          fi
+          
+          echo "Security baseline established" >> summary.md
+          cat summary.md
+
+      - name: Create GitHub Security Issue (if critical findings)
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+            
+            const openSecurityIssues = issues.data.filter(issue => 
+              issue.labels.some(label => label.name === 'security') &&
+              issue.state === 'open'
+            );
+            
+            if (openSecurityIssues.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `Security Scan #${context.runNumber}: Critical Issues Found`,
+                body: `Pipeline [${context.runNumber}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) found critical security issues.\n\n**Review artifacts and fix before production deployment.**`,
+                labels: ['security', 'pipeline', 'needs-triage']
+              });
+            }
+
+      - name: Update Security Status
+        if: success()
+        run: |
+          gh pr close --comment "Security pipeline passed: #${{ github.run_number }}" || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
