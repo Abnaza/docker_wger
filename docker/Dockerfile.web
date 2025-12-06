@@ -1,1 +1,12 @@
 FROM docker.io/wger/server:latest
+USER root
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y --auto-remove \
+    coreutils gpgv libgcrypt20 libicu74 login openssl passwd tar wget \
+    gpg libpam* libpq-dev postgresql-client && \
+    apt-get autoremove -y && \
+    apt-get clean && \
+    find /usr -type f -name '*.a' -delete && \
+    find /usr -type f -name '*.la' -delete && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /var/cache/* /usr/share/doc/* /usr/share/man/*
+USER 1000

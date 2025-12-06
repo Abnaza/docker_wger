@@ -1,1 +1,1 @@
-FROM docker.io/postgres:15-alpine
+FROM bitnami/postgresql:latest
