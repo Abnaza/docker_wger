@@ -1,6 +1,4 @@
-#FROM docker.io/redis:alpine
 FROM bitnami/redis:latest
 USER root
-RUN rm -rf /opt/bitnami/common/bin/wait-for-port \
-    /opt/bitnami/common/.spdx-wait-for-port.spdx
+RUN rm -rf /opt/bitnami/common/bin/wait-for-port /opt/bitnami/common/.spdx-wait-for-port.spdx
 USER 1001

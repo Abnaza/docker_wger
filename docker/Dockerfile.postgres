@@ -1,1 +1,4 @@
-FROM bitnami/postgresql:latest
+FFROM bitnami/postgresql:latest
+USER root
+RUN rm -f /opt/bitnami/scripts/postgresql/entrypoint.sh || true
+USER 1001

@@ -1,7 +1,8 @@
 FROM bitnami/nginx:latest
 USER root
-RUN rm -rf /opt/bitnami/nginx-agent \
+COPY config/nginx.conf /opt/bitnami/nginx/conf/server_blocks/wger.conf
+RUN rm -rf /opt/bitnami/nginx/conf/server_blocks/default.conf \
+    /opt/bitnami/nginx-agent \
     /opt/bitnami/common/bin/render-template \
     /opt/bitnami/common/.spdx-render-template.spdx
-COPY config/nginx.conf /etc/nginx/conf.d/default.conf
 USER 1001

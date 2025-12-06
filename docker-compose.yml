@@ -27,25 +27,6 @@ services:
       start_period: 300s
       retries: 5
     restart: unless-stopped
-    ###
-    read_only: true                    # Blocks file writes/exploits
-    tmpfs:
-      - /tmp:rw,size=1M               # Tiny writable tmp
-      - /var/tmp:rw,size=1M
-    security_opt:
-      - no-new-privileges:true         # Blocks priv escalation
-      - seccomp:unconfined             # Strict syscall filter
-    cap_drop:
-      - ALL                            # Drop all capabilities
-    cap_add:
-      - CHOWN                          # Only needed for media
-      - DAC_OVERRIDE
-    ulimits:
-      nofile: 1024                     # Limit FDs
-      nproc: 1024                      # Limit processes
-    sysctls:
-      - kernel.dmesg_restrict=1        # Block kernel logs
-      - kernel.kptr_restrict=2
 
   nginx:
     build:
@@ -54,7 +35,7 @@ services:
     depends_on:
       - web
     volumes:
-      #- ./config/nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./config/nginx.conf:/etc/nginx/conf.d/default.conf
       - static:/wger/static:ro
       - media:/wger/media:ro
     ports:
@@ -72,9 +53,9 @@ services:
       context: .
       dockerfile: docker/Dockerfile.postgres
     environment:
-      - POSTGRES_USER=wger
-      - POSTGRES_PASSWORD=wger
-      - POSTGRES_DB=wger
+      - POSTGRESQL_USERNAME=wger
+      - POSTGRESQL_PASSWORD=wger
+      - POSTGRESQL_DATABASE=wger
       - TZ=Europe/Berlin
     volumes:
       - postgres-data:/var/lib/postgresql/data/
