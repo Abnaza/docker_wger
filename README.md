@@ -22,7 +22,6 @@ It is recommended to regularly pull the latest version of the compose file,
 since sometimes new configurations or environmental variables are added.
 
 ## Contact
-
 Feel free to contact us if you found this useful or if there was something that
 didn't behave as you expected. We can't fix what we don't know about, so please
 report liberally. If you're not sure if something is a bug or not, feel free to
@@ -34,12 +33,10 @@ file a bug anyway.
 
 
 ## Sources
-
 All the code and the content is freely available:
 
 * <https://github.com/wger-project/>
 
 ## Licence
-
 The application is licenced under the Affero GNU General Public License 3 or
 later (AGPL 3+).
