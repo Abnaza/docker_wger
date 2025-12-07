@@ -31,7 +31,6 @@ file a bug anyway.
 * Discord: <https://discord.gg/rPWFv6W>
 * Issue tracker: <https://github.com/wger-project/docker/issues>
 
-
 ## Sources
 All the code and the content is freely available:
 
