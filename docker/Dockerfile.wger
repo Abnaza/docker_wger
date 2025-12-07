@@ -1,5 +1,22 @@
 FROM docker.io/wger/server:latest
 USER root
-RUN pip install --no-cache-dir --upgrade --break-system-packages urllib3>=2.6.0
+
+# 1. Remove ALL urllib3 traces (system + user)
+RUN pip uninstall -y urllib3 || true
+RUN rm -rf /usr/local/lib/python3.*/site-packages/urllib3* \
+           /home/wger/.local/lib/python3.*/site-packages/urllib3* \
+           /usr/lib/python3.*/site-packages/urllib3*
+
+# 2. Clear pip cache completely
+RUN pip cache purge
+
+# 3. Install ONLY urllib3 2.6.0+ (exact version)
+RUN pip install --no-cache-dir --break-system-packages "urllib3==2.6.0"
+
+# 4. Verify installation
+RUN python3 -c "import urllib3; print('urllib3 version:', urllib3.__version__); assert urllib3.__version__ == '2.6.0'"
+
+# 5. Original updates
 RUN apt-get update && apt-get upgrade -y && apt-get autoremove -y && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 USER 1000
