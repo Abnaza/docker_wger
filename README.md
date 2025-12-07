@@ -45,6 +45,3 @@ All the code and the content is freely available:
 
 The application is licenced under the Affero GNU General Public License 3 or
 later (AGPL 3+).
-
-
-
