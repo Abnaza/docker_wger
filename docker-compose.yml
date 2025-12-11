@@ -15,33 +15,32 @@ services:
       - media:/home/wger/media
     expose:
       - 8000
-    logging:
-      driver: json-file
-      options:
-        max-size: 5m
-        max-file: 5
     healthcheck:
-      test: wget --no-verbose --tries=1 --spider http://localhost:8000
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000"]
       interval: 10s
       timeout: 5s
       start_period: 300s
       retries: 5
     restart: unless-stopped
 
-  nginx:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.nginx
-    depends_on:
-      - web
+  waf:
+    image: owasp/modsecurity-crs:nginx
+    ports:
+      - "443:8443"
+      - "80:8080"
+    environment:
+      PARANOIA: 1
+      ANOMALY_INBOUND: 5
+      ANOMALY_OUTBOUND: 4
     volumes:
-      - ./config/nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./certs:/etc/nginx/certs:ro
+      - ./config/waf.conf:/etc/nginx/templates/conf.d/default.conf.template:ro
       - static:/wger/static:ro
       - media:/wger/media:ro
-    ports:
-      - "80:80"
+    depends_on:
+      - web
     healthcheck:
-      test: service nginx status
+      test: ["CMD", "service", "nginx", "status"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -56,18 +55,13 @@ services:
       - POSTGRESQL_USERNAME=wger
       - POSTGRESQL_PASSWORD=wger
       - POSTGRESQL_DATABASE=wger
-      - TZ=Europe/Berlin
+      - TZ=America/Toronto
     volumes:
       - postgres-data:/var/lib/postgresql/data/
     expose:
       - 5432
-    logging:
-      driver: json-file
-      options:
-        max-size: 5m
-        max-file: 5
     healthcheck:
-      test: pg_isready -U wger
+      test: ["CMD", "pg_isready", "-U", "wger"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -80,17 +74,12 @@ services:
       dockerfile: docker/Dockerfile.redis
     expose:
       - 6379
-    logging:
-      driver: json-file
-      options:
-        max-size: 5m
-        max-file: 5
     volumes:
       - ./config/redis.conf:/usr/local/etc/redis/redis.conf
       - redis-data:/data
-    command: [ "redis-server", "/usr/local/etc/redis/redis.conf"]
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
     healthcheck:
-      test: redis-cli ping
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -106,44 +95,35 @@ services:
       - ./config/prod.env
     volumes:
       - media:/home/wger/media
-    logging:
-      driver: json-file
-      options:
-        max-size: 5m
-        max-file: 5
     depends_on:
       web:
         condition: service_healthy
     healthcheck:
-      test: celery -A wger inspect ping
+      test: ["CMD", "celery", "-A", "wger", "inspect", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
+    restart: unless-stopped
 
   celery_beat:
     build:
       context: .
       dockerfile: docker/Dockerfile.wger
     command: /start-beat
-    logging:
-      driver: json-file
-      options:
-        max-size: 5m
-        max-file: 5
-    volumes:
-      - celery-beat:/home/wger/beat/
     env_file:
       - ./config/prod.env
+    volumes:
+      - celery-beat:/home/wger/beat/
     depends_on:
       celery_worker:
         condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   postgres-data:
   celery-beat:
   redis-data:
-
   media:
   static:
 
